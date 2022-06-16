@@ -123,6 +123,26 @@ parse_stancsv_comments <- function(comments) {
   c(values, add_lst)  
 }
 
+# rewritten read_stan_csv functions to use data.table::fread. Code inherits 
+# heavily from cmdstanr 2.27.0. Note that read.csv() and fread() will occasionally
+# return data.frames with minor numeric differences (on scale of e-16), so a 
+# simple identical() check on outputs will return false. Differences occur in 
+# ss_lst
+
+# repair path function 
+# verbatim from cmdstanr:::repair_path
+repair_path <- function(path) {
+  if (!length(path) || !is.character(path)) {
+    return(path)
+  }
+  path <- path.expand(path)
+  path <- gsub("\\\\", "/", path)
+  path <- gsub("//", "/", path)
+  if (endsWith(path, "/")) {
+    path <- substr(path, 1, nchar(path) - 1)
+  }
+  path
+}
 
 read_stan_csv <- function(csvfiles, col_major = TRUE) {
   # Read the csv files saved from Stan (or RStan) to a stanfit object
@@ -131,41 +151,66 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   #     the sample of one chain 
   #   col_major: the order for array parameters. 
   # 
-
+  
   if (length(csvfiles) < 1) 
     stop("csvfiles does not contain any CSV file name")
 
-  g_skip <- 10
-  
   ss_lst <- vector("list", length(csvfiles))
   cs_lst2 <- vector("list", length(csvfiles))
-
+  
   for (i in seq_along(csvfiles)) {
     f = csvfiles[i]    
     header <- read_csv_header(f)
-    lineno <- attr(header, 'lineno')
-    vnames <- strsplit(header, ",")[[1]]
-    iter.count <- attr(header,"iter.count")
-    variable.count <- length(vnames)
 
-    lines = readLines(f)
-    comment_lines = grep("^#", lines)
-    comments = lines[comment_lines]
-    con = textConnection(lines[-comment_lines])
-    on.exit(close(con))
-    df = read.csv(con, colClasses = "numeric")
-    cs_lst2[[i]] <- parse_stancsv_comments(comments)
-    if("output_samples" %in% names(cs_lst2[[i]])) 
-      df <- df[-1,] # remove the means 
+    # create df 
+    # code ripped from cmdstanr:::read_cmdstan_csv
+    for (output_file in files) {
+      if (isTRUE(.Platform$OS.type == "windows")) {
+        grep_path <- cmdstanr:::repair_path(Sys.which("grep.exe"))
+        fread_cmd <- paste0(grep_path, " -v '^#' --color=never '", 
+                            output_file, "'")
+      } else {
+        fread_cmd <- paste0("grep -v '^#' --color=never '", 
+                            output_file, "'")
+      }
+    }
+    
+    df <- data.table::fread(cmd = fread_cmd, data.table = FALSE, 
+                            colClasses = "numeric")
+    
+    # comments 
+    # code ripped from cmdstanr:::read_csv_metadata
+    if (isTRUE(.Platform$OS.type == "windows")) {
+      grep_path <- repair_path(Sys.which("grep.exe"))
+      fread_cmd <- paste0(grep_path, " '^[#a-zA-Z]' --color=never '", 
+                          csv_file, "'")
+    } else {
+      fread_cmd <- paste0("grep '^[#a-zA-Z]' --color=never '", 
+                          csv_file, "'")
+    }
+    
+    suppressWarnings(metadata <- data.table::fread(cmd = fread_cmd, 
+                                                   colClasses = "character", 
+                                                   stringsAsFactors = FALSE, 
+                                                   fill = TRUE, sep = "", 
+                                                   header = FALSE, 
+                                                   data.table=FALSE))
+    
+    # minor reformatting
+    metadata2 <- metadata[,1][grepl("#", metadata[,1])]
+    metadata3 <- sub("#$", "# ", metadata2)
+    
+    cs_lst2[[i]] <- rstan:::parse_stancsv_comments(metadata3)
+    if("output_samples" %in% names(cs_lst2[[i]])) df <- df[-1,] # remove the means 
     ss_lst[[i]] <- df
   } 
 
   # use the first CSV file name as model name
   m_name <- sub("(_\\d+)*$", '', filename_rm_ext(basename(csvfiles[1])))
-
+  
   sdate <- do.call(max, lapply(csvfiles, function(csv) file.info(csv)$mtime))
   sdate <- format(sdate, "%a %b %d %X %Y") # same format as date() 
-
+  
   chains <- length(ss_lst)
   fnames <- names(ss_lst[[1]])
   n_save <- nrow(ss_lst[[1]])
@@ -204,16 +249,16 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     if (cs_lst2[[i]]$has_time)
       attr(samples[[i]], "elapsed_time") <- get_time_from_csv(cs_lst2[[i]]$time_info)
   } 
-
+  
   save_warmup <- sapply(cs_lst2, function(i) i$save_warmup)
   warmup <- sapply(cs_lst2, function(i) i$warmup)
   thin <- sapply(cs_lst2, function(i) i$thin)
   iter <- sapply(cs_lst2, function(i) i$iter)
-
+  
   if (!all_int_eq(warmup) || !all_int_eq(thin) || !all_int_eq(iter)) 
     stop("not all iter/warmups/thin are the same in all CSV files")
   
-
+  
   n_kept0 <- 1 + (iter - warmup - 1) %/% thin
   warmup2 <- 0
   if (max(save_warmup) == 0L) { # all equal to 0L
@@ -226,7 +271,7 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     warning("the number of iterations after warmup found (", n_kept, 
             ") does not match iter/warmup/thin from CSV comments (",
             paste(n_kept0, collapse = ','), ")")
-
+    
     if (n_kept < 0) {
       warmup <- warmup + n_kept
       n_kept <- 0
@@ -234,7 +279,7 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     }
     n_kept0 <- n_save
     iter <- n_save
-
+    
     for (i in 1:length(cs_lst2)) {
       cs_lst2[[i]]$warmup <- warmup
       cs_lst2[[i]]$iter <- iter
@@ -246,9 +291,9 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     attr(samples[[i]], "mean_pars") <- m[-length(m)]
     attr(samples[[i]], "mean_lp__") <- m["lp__"]
   }
-
+  
   perm_lst <- lapply(1:chains, function(id) sample.int(n_kept))
-
+  
   sim = list(samples = samples, 
              iter = iter[1], 
              thin = thin[1], 
@@ -263,10 +308,10 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
              n_flatnames = length(par_fnames))
   null_dso <- new("cxxdso", sig = list(character(0)), dso_saved = FALSE, dso_filename = character(0), 
                   modulename = character(0), system = R.version$system, cxxflags = character(0), 
-                 .CXXDSOMISC = new.env(parent = emptyenv()))
+                  .CXXDSOMISC = new.env(parent = emptyenv()))
   null_sm <- new("stanmodel", model_name = m_name, model_code = character(0), 
                  model_cpp = list(), dso = null_dso)
-
+  
   nfit <- new("stanfit", 
               model_name = m_name,
               model_pars = pars_oi,
