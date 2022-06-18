@@ -160,19 +160,17 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   
   for (i in seq_along(csvfiles)) {
     f = csvfiles[i]    
-    header <- read_csv_header(f)
 
     # create df 
     # code ripped from cmdstanr:::read_cmdstan_csv
-    for (output_file in files) {
-      if (isTRUE(.Platform$OS.type == "windows")) {
-        grep_path <- cmdstanr:::repair_path(Sys.which("grep.exe"))
-        fread_cmd <- paste0(grep_path, " -v '^#' --color=never '", 
-                            output_file, "'")
-      } else {
-        fread_cmd <- paste0("grep -v '^#' --color=never '", 
-                            output_file, "'")
-      }
+    
+    if (isTRUE(.Platform$OS.type == "windows")) {
+      grep_path <- cmdstanr:::repair_path(Sys.which("grep.exe"))
+      fread_cmd <- paste0(grep_path, " -v '^#' --color=never '", 
+                          f, "'")
+    } else {
+      fread_cmd <- paste0("grep -v '^#' --color=never '", 
+                          f, "'")
     }
     
     df <- data.table::fread(cmd = fread_cmd, data.table = FALSE, 
@@ -183,10 +181,10 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     if (isTRUE(.Platform$OS.type == "windows")) {
       grep_path <- repair_path(Sys.which("grep.exe"))
       fread_cmd <- paste0(grep_path, " '^[#a-zA-Z]' --color=never '", 
-                          csv_file, "'")
+                          f, "'")
     } else {
       fread_cmd <- paste0("grep '^[#a-zA-Z]' --color=never '", 
-                          csv_file, "'")
+                          f, "'")
     }
     
     suppressWarnings(metadata <- data.table::fread(cmd = fread_cmd, 
@@ -206,7 +204,7 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   } 
 
   # use the first CSV file name as model name
-  m_name <- sub("(_\\d+)*$", '', filename_rm_ext(basename(csvfiles[1])))
+  m_name <- sub("(_\\d+)*$", '', rstan:::filename_rm_ext(basename(csvfiles[1])))
   
   sdate <- do.call(max, lapply(csvfiles, function(csv) file.info(csv)$mtime))
   sdate <- format(sdate, "%a %b %d %X %Y") # same format as date() 
@@ -217,12 +215,12 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   paridx <- paridx_fun(fnames)
   lp__idx <- attr(paridx, 'meta')["lp__"]
   par_fnames <- c(fnames[paridx], "lp__")
-  pars_oi <- unique_par(par_fnames)
+  pars_oi <- rstan:::unique_par(par_fnames)
   dims_oi <- lapply(pars_oi, 
                     function(i) {
                       pat <- paste('^', i, '(\\.\\d+)*$', sep = '')
                       i_fnames <- par_fnames[grepl(pat, par_fnames)]
-                      get_dims_from_fnames(i_fnames, i) 
+                      rstan:::get_dims_from_fnames(i_fnames, i) 
                     })
   names(dims_oi) <- pars_oi
   midx <- if (!col_major) multi_idx_row2colm(dims_oi) else 1:length(par_fnames)
