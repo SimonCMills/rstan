@@ -161,9 +161,7 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
   for (i in seq_along(csvfiles)) {
     f = csvfiles[i]    
 
-    # create df 
-    # code ripped from cmdstanr:::read_cmdstan_csv
-    
+    # get non-comment component, "df" (code from cmdstanr:::read_cmdstan_csv)
     if (isTRUE(.Platform$OS.type == "windows")) {
       grep_path <- cmdstanr:::repair_path(Sys.which("grep.exe"))
       fread_cmd <- paste0(grep_path, " -v '^#' --color=never '", 
@@ -176,8 +174,7 @@ read_stan_csv <- function(csvfiles, col_major = TRUE) {
     df <- data.table::fread(cmd = fread_cmd, data.table = FALSE, 
                             colClasses = "numeric")
     
-    # comments 
-    # code ripped from cmdstanr:::read_csv_metadata
+    # get comments (code from cmdstanr:::read_csv_metadata)
     if (isTRUE(.Platform$OS.type == "windows")) {
       grep_path <- repair_path(Sys.which("grep.exe"))
       fread_cmd <- paste0(grep_path, " '^[#a-zA-Z]' --color=never '", 
